@@ -21,6 +21,14 @@ During inference we use nemo TN normalized UTF-8 bytes and an ECAPA-TDNN embeddi
   <img src="./assets/zonos2_arlooop_animated.gif" alt="ZONOS2 title card" width="750" />
 </p>
 
+Language support is as follows.
+| Tier   | Languages                                                                                                                                                                                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tier 1 | English, Mandarin Chinese, Japanese                                                                                                                                                            |
+| Tier 2 | Korean, Russian, Italian, Portuguese, French, Spanish, Vietnamese, German, Hebrew, Dutch                                                                                                       |
+| Tier 3 | Swedish, Hindi, Tamil, Telugu, Thai, Norwegian, Bengali, Tagalog, Arabic, Danish, Indonesian, Polish, Ukrainian, Romanian, Finnish, Hungarian, Lithuanian, Estonian, Slovak, Croatian, Latvian |
+
+
 For local inference we provide a high-performance TTS inference server built on [Mini-SGLang](https://github.com/sgl-project/mini-sglang).
 
 **For more details and speech samples, check out our [blog](https://www.zyphra.com/our-work/zonos2).**
@@ -206,3 +214,16 @@ If you find this model useful in an academic context please cite as:
   year      = {2026},
 }
 ```
+
+## License
+
+ZONOS2 is released under the [MIT License](LICENSE).
+
+It incorporates third-party components under their own licenses — see
+[`NOTICE`](NOTICE) and [`licenses/`](licenses/):
+
+- The TTS inference server and runtime are derived from
+  [Mini-SGLang](https://github.com/sgl-project/mini-sglang) (MIT).
+- `python/zonos2/vendor/nemo_text_processing/` is vendored from
+  [NVIDIA NeMo-text-processing](https://github.com/NVIDIA/NeMo-text-processing)
+  (Apache-2.0).
