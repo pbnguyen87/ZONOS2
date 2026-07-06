@@ -29,7 +29,9 @@ Language support is as follows.
 | Tier 3 | Swedish, Hindi, Tamil, Telugu, Thai, Norwegian, Bengali, Tagalog, Arabic, Danish, Indonesian, Polish, Ukrainian, Romanian, Finnish, Hungarian, Lithuanian, Estonian, Slovak, Croatian, Latvian |
 
 
-For local inference we provide a high-performance TTS inference server built on [Mini-SGLang](https://github.com/sgl-project/mini-sglang).
+For high-performance local inference we provide a TTS inference server built on [Mini-SGLang](https://github.com/sgl-project/mini-sglang).
+
+For cpu inference and cross platform support we provide a ggml implementation for ZONOS2 in this [repo](https://github.com/Zyphra/zonos2.cpp).
 
 **For more details and speech samples, check out our [blog](https://www.zyphra.com/our-work/zonos2).**
 
