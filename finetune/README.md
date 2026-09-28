@@ -96,6 +96,138 @@ uv run python -m zonos2 --model-path runs/my_voice --tts-default-voices-dir ./de
 
 LoRA runs also drop a small `lora_adapter.pt` next to the merged checkpoint.
 
+## Hướng dẫn fine-tune giọng tiếng Việt từ audio-pipeline
+
+Quy trình đầy đủ, từ máy trắng đến checkpoint chạy được, cho dữ liệu đã qua
+`speech_dataset/audio-pipeline` (đầu ra stage `s7_loudnorm`). Chạy trên Linux có
+GPU NVIDIA, mọi lệnh từ gốc repo.
+
+### Bước 0. Môi trường
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh      # nếu chưa có uv
+uv python pin 3.12                                    # pynini 2.1.6 chỉ có wheel cho 3.10–3.12
+uv sync
+sudo apt-get install -y ffmpeg
+uv pip install "torchcodec==0.8.*"                    # torchaudio 2.9 đọc file qua torchcodec
+uv run python finetune/train.py --smoke               # kiểm tra pipeline train trên CPU, ~1 phút
+```
+
+Weights được tải tự động lần đầu vào `~/.cache/huggingface/hub/` (ZONOS2 ~16 GB,
+speaker encoder ~3.4 GB) và `~/.cache/descript/dac/` (DAC ~300 MB). Đặt `HF_HOME`
+nếu ổ home nhỏ.
+
+### Bước 1. Xem trước dữ liệu qua bộ lọc
+
+`finetune/prepare_vi_from_s7.py` đọc `s7_loudnorm/manifest.jsonl`, lọc theo tier A
+của pipeline, chuẩn hóa số/ngày/viết tắt tiếng Việt (ZONOS2 không có NeMo cho
+tiếng Việt), chia train/val trong từng speaker.
+
+```bash
+uv run python finetune/prepare_vi_from_s7.py \
+    --s7-dir /path/audio-pipeline/work_XXX/s7_loudnorm \
+    --out-dir data/zonos2_vi --dry-run
+```
+
+Đọc `accepted`, `hours_total`, `utts_per_speaker` và `rejected`. Mục tiêu tối thiểu
+cho một giọng: 30 phút; tốt: 1–2 giờ. Nới ngưỡng khi thiếu, ví dụ
+`--max-cer 0.05 --min-snr-db 15`. Giữ `--max-seconds` ≤ 20 vì `train.py` bỏ chuỗi
+dài hơn 2048 frame (~23 s ở 86 frame/s, gồm cả prompt).
+
+### Bước 2. Tạo manifest và tensor `.pt`
+
+```bash
+uv run python finetune/prepare_vi_from_s7.py \
+    --s7-dir /path/audio-pipeline/work_XXX/s7_loudnorm \
+    --out-dir data/zonos2_vi \
+    --run-preprocess --model-path Zyphra/ZONOS2 --device cuda
+```
+
+Kết quả trong `data/zonos2_vi/`: `train.jsonl`, `val.jsonl`, `summary.json`, và hai
+thư mục `train/`, `val/` chứa `.pt` (DAC codes `(T, 9)`, speaker embedding 2048-d
+tính từ chính câu đó, text đã chuẩn hóa). Chạy lại sẽ dùng lại `.pt` đã có.
+Nếu đã có sẵn JSONL dạng `{"audio","text","language"}`, dùng thẳng
+`finetune/preprocess.py --manifest ... --no-normalize`.
+
+**Từ dataset s8 thay vì s7.** Nếu chỉ có thư mục đóng gói `s8_package/` (đã gán tier,
+audio nằm trong `dataset/wav/`), dùng `finetune/prepare_vi_from_s8.py`; nó chọn theo
+tier thay vì từng ngưỡng, còn lại giống hệt script s7 (cùng cờ `--run-preprocess`,
+`--max-seconds`, `--min-utts-per-speaker`):
+
+```bash
+uv run python finetune/prepare_vi_from_s8.py \
+    --s8-dir /path/audio-pipeline/work_XXX/s8_package \
+    --out-dir data/zonos2_vi --tiers A --dry-run          # hoặc --tiers A,B khi thiếu dữ liệu
+
+uv run python finetune/prepare_vi_from_s8.py --s8-dir ... --out-dir data/zonos2_vi \
+    --tiers A --run-preprocess --model-path Zyphra/ZONOS2 --device cuda
+```
+
+`--use-pipeline-split` giữ cách chia theo speaker của s8 (val/test gộp vào val);
+`--from-manifest` đọc `manifest.jsonl` để lấy cả tier chưa được xuất, cần còn audio s7.
+
+### Bước 3. Fine-tune LoRA
+
+```bash
+uv run python finetune/train.py \
+    --model-path Zyphra/ZONOS2 \
+    --data data/zonos2_vi/train \
+    --output-dir runs/vi_podcast \
+    --batch-size 2 --grad-accum 8 --epochs 3 \
+    --grad-checkpoint --save-every 500
+```
+
+- Với 1 giờ dữ liệu, batch hiệu dụng 16, mỗi epoch khoảng 250 bước; 3 epoch là
+  điểm bắt đầu hợp lý. Thiếu VRAM: `--batch-size 1 --grad-accum 16`.
+- `--clean-background` chỉ khi audio tham chiếu sạch; mặc định là noisy, khớp
+  server. Cờ này, `--expressive` và `--no-quality` phải dùng giống nhau lúc train
+  và lúc gọi suy luận.
+- Dữ liệu ít mà giọng chưa giống: thêm `--lora-targets wq wkv wo w_in w_out speaker_projection`
+  hoặc tăng `--lora-r 32`. Full fine-tune (`--full --lr 1e-5`) chỉ khi có nhiều
+  giờ dữ liệu và GPU đủ lớn, vì toàn bộ expert MoE được nạp dense.
+
+Checkpoint merged nằm ở `runs/vi_podcast/` (`model.pth` + `params.json`), các bản
+định kỳ ở `runs/vi_podcast/stepN/`, adapter riêng ở `lora_adapter.pt`.
+
+### Bước 4. Nghe thử và so với model gốc
+
+```bash
+# model gốc
+uv run python scripts/generate_vi.py --speaker-wav ref.wav \
+    --text "Hôm nay là 24/9/2026, nhiệt độ 31,5 độ." --out out/base.wav
+# model fine-tune
+uv run python scripts/generate_vi.py --model-path runs/vi_podcast --speaker-wav ref.wav \
+    --text "Hôm nay là 24/9/2026, nhiệt độ 31,5 độ." --out out/ft.wav
+```
+
+`ref.wav` là một clip 5–15 s của đúng giọng đã train. Lấy vài câu trong
+`data/zonos2_vi/val.jsonl` (model chưa thấy) để so phát âm và độ giống; câu có số,
+tên riêng và từ tiếng Anh xen kẽ là chỗ hay lộ lỗi nhất. Đánh giá nhanh bằng
+Whisper large-v3 hoặc PhoWhisper trên audio sinh ra để lấy WER, và một model
+speaker verification để lấy cosine similarity với `ref.wav`.
+
+### Bước 5. Phục vụ
+
+```bash
+uv run python -m zonos2 --model-path runs/vi_podcast --tts-default-voices-dir ./default_voices/
+```
+
+Với tiếng Việt qua API, gửi `text_normalization: false` và tự chuẩn hóa text trước,
+vì server sẽ từ chối `language: "vi"`; hàm `normalize_vietnamese` trong
+`scripts/generate_vi.py` dùng lại được.
+
+### Sự cố thường gặp
+
+| Triệu chứng | Nguyên nhân / cách xử lý |
+|---|---|
+| `Failed to build pynini==2.1.6` | Python 3.13 không có wheel; `uv python pin 3.12` rồi `rm -rf .venv && uv sync` |
+| `TorchCodec is required for load_with_torchcodec` | `uv pip install "torchcodec==0.8.*"` và cài `ffmpeg` |
+| `[warn] failed on ...` khi preprocess | file audio hỏng hoặc torchcodec thiếu; đối chiếu `index.json` với số dòng JSONL |
+| Nhiều câu bị bỏ vì `max-frames` | giảm `--max-seconds` ở bước 1, hoặc tăng `--max-frames` khi train nếu VRAM cho phép |
+| Giọng sau fine-tune giống hệt gốc | LoRA chưa đủ: kiểm tra loss có giảm không, tăng epoch/rank, thêm `speaker_projection` vào targets |
+| Giọng vỡ hoặc lặp | learning rate cao hoặc quá nhiều epoch trên ít dữ liệu; lùi về `stepN/` sớm hơn |
+| Số bị đọc từng chữ số | text chưa chuẩn hóa; dùng `prepare_vi_from_s7.py` (mặc định chuẩn hóa) hoặc chuẩn hóa trước khi `preprocess.py --no-normalize` |
+
 ## Smoke test (no GPU / no checkpoint)
 
 ```bash
